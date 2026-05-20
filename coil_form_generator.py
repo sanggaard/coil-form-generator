@@ -21,40 +21,45 @@ def _helix_groove(pitch, num_windings, radius, groove_radius, segments_per_turn=
 
 def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_distance,
                          inner_diameter=None, wire_hole_diameter=None,
-                         plate_thickness=None, pcb_clearance=None):
+                         plate_thickness=None, pcb_clearance=None, flange_extension=None):
     pitch = wire_diameter + winding_distance
     total_length = num_windings * pitch
     form_radius = (coil_diameter - wire_diameter) / 2
 
     flange_thickness = plate_thickness if plate_thickness is not None else max(wire_diameter * 2, 1.5)
+    # pcb_clearance: distance from PCB surface to the bottom of the coil body (y=-form_radius).
+    # Controls only the rectangle height — the semicircle is independent.
     pcb_gap = pcb_clearance if pcb_clearance is not None else wire_diameter * 2
-    flange_radius = form_radius + pcb_gap
+    # flange_extension: how much the semicircle extends beyond the outer coil edge.
+    ext = flange_extension if flange_extension is not None else wire_diameter
+    semi_radius = form_radius + wire_diameter + ext  # outer coil radius + extension
     groove_radius = wire_diameter / 2 * 0.95
     hole_radius = (wire_hole_diameter / 2) if wire_hole_diameter is not None else wire_diameter * 0.8
 
-    foot_width = flange_radius * 2
+    foot_width = semi_radius * 2
+    rect_height = form_radius + pcb_gap   # rectangle spans y=0 down to y=-(form_radius+pcb_gap)
+    pcb_y = -(form_radius + pcb_gap)      # PCB contact surface
 
     # Body with helical groove (z=0 to z=total_length)
     body = m3d.Manifold.cylinder(total_length, form_radius)
     groove = _helix_groove(pitch, num_windings, form_radius, groove_radius)
     body = body - groove
 
-    # End plate cross-section: upper semicircle + lower rectangle.
-    # The semicircle (y >= 0) contains the windings; the rectangle (y <= 0)
-    # is the foot with a flat bottom face at y = -flange_radius for PCB mounting.
+    # End plate: upper semicircle (radius=semi_radius, contains windings) +
+    # lower rectangle (height=rect_height, flat PCB-contact face).
     # Plate is rebuilt per end — trim_by_plane result cannot be translated twice.
     def _make_plate():
         upper_semi = (
-            m3d.Manifold.cylinder(flange_thickness, flange_radius)
+            m3d.Manifold.cylinder(flange_thickness, semi_radius)
             .trim_by_plane((0, 1, 0), 0)
         )
         lower_rect = (
-            m3d.Manifold.cube((foot_width, flange_radius, flange_thickness), center=False)
-            .translate((-foot_width / 2, -flange_radius, 0))
+            m3d.Manifold.cube((foot_width, rect_height, flange_thickness), center=False)
+            .translate((-foot_width / 2, -rect_height, 0))
         )
         return upper_semi + lower_rect
 
-    y_hole_height = flange_radius - form_radius + hole_radius + 1
+    y_hole_height = pcb_gap + hole_radius + 1  # from just below PCB up past the wire exit
 
     for z_plate_start, z_inner_face, inner_dir in [
         (-flange_thickness, 0, -1),        # left plate: z=-flange_thickness to z=0
@@ -73,7 +78,7 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
         y_hole = (
             m3d.Manifold.cylinder(y_hole_height, hole_radius)
             .rotate((90, 0, 0))
-            .translate((0, -flange_radius - 1, z_y))
+            .translate((0, pcb_y - 1, z_y))
         )
 
         body = body + (plate - z_hole - y_hole)
@@ -165,10 +170,13 @@ def main():
             "  Form body OD  = diameter - wire\n"
             "  Pitch per winding = wire + gap\n\n"
             "Advanced parameters (all optional, shown with their defaults):\n"
-            "  --coil-hole      default: form body OD - 2×2 mm  (2 mm wall thickness)\n"
-            "  --wire-hole      default: 1.6 × wire diameter     (permanent only)\n"
-            "  --plate-thickness default: max(2 × wire, 1.5 mm) (permanent only)\n"
-            "  --pcb-clearance  default: 2 × wire diameter       (permanent only)\n\n"
+            "  --coil-hole        default: 2 mm wall thickness\n"
+            "  --wire-hole        default: 1.6 × wire diameter          (permanent only)\n"
+            "  --plate-thickness  default: max(2 × wire, 1.5 mm)        (permanent only)\n"
+            "  --flange-extension default: 1 × wire diameter            (permanent only)\n"
+            "                     extra radius of the semicircle beyond the outer coil edge\n"
+            "  --pcb-clearance    default: 2 × wire diameter            (permanent only)\n"
+            "                     controls rectangle height only, not the semicircle\n\n"
             "Examples:\n"
             "  %(prog)s -d 10 -n 10 -w 0.5 -g 0.1\n"
             "  %(prog)s -d 10 -n 6  -w 1.3 -g 0.5 --permanent\n"
@@ -201,8 +209,11 @@ def main():
     adv.add_argument("--plate-thickness", type=float, default=None, metavar="MM",
                      help="End plate thickness in mm (default: max(2 × wire, 1.5 mm), permanent only)")
     adv.add_argument("--pcb-clearance", type=float, default=None, metavar="MM",
-                     help="Distance from PCB surface to coil wire centre in mm "
-                          "(default: 2 × wire diameter, permanent only)")
+                     help="Distance from PCB surface to bottom of coil body in mm "
+                          "(sets rectangle height only, default: 2 × wire, permanent only)")
+    adv.add_argument("--flange-extension", type=float, default=None, metavar="MM",
+                     help="How much the semicircular flange extends beyond the outer coil edge in mm "
+                          "(default: 1 × wire diameter, permanent only)")
 
     args = parser.parse_args()
 
@@ -228,6 +239,8 @@ def main():
     plate_t = args.plate_thickness if args.plate_thickness is not None else max(args.wire * 2, 1.5)
     pcb_gap = args.pcb_clearance if args.pcb_clearance is not None else args.wire * 2
     wire_h  = args.wire_hole if args.wire_hole is not None else args.wire * 1.6
+    flange_ext = args.flange_extension if args.flange_extension is not None else args.wire
+    semi_r = form_radius + args.wire + flange_ext
 
     print(f"Generating {form_type} coil form...")
     print(f"  Mean diameter   : {args.diameter} mm")
@@ -240,7 +253,8 @@ def main():
     print(f"  Centre hole dia : {inner_r * 2:.3f} mm" if inner_r > 0.5 else "  Centre hole     : none (wall too thin)")
     if args.permanent:
         print(f"  Plate thickness : {plate_t:.3f} mm")
-        print(f"  PCB clearance   : {pcb_gap:.3f} mm")
+        print(f"  Flange semi OD  : {semi_r * 2:.3f} mm  (ext {flange_ext:.3f} mm beyond outer coil)")
+        print(f"  PCB clearance   : {pcb_gap:.3f} mm  (rectangle height)")
         print(f"  Wire hole dia   : {wire_h:.3f} mm")
 
     if args.permanent:
@@ -250,6 +264,7 @@ def main():
             wire_hole_diameter=args.wire_hole,
             plate_thickness=args.plate_thickness,
             pcb_clearance=args.pcb_clearance,
+            flange_extension=args.flange_extension,
         )
     else:
         result = build_removable_form(
