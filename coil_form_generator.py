@@ -24,50 +24,64 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
     total_length = num_windings * pitch
     form_radius = (coil_diameter - wire_diameter) / 2
 
-    flange_thickness = wire_diameter * 1.5
-    flange_radius = form_radius + wire_diameter * 2
+    flange_thickness = max(wire_diameter * 2, 1.5)  # half of previous thickness
+    flange_radius = form_radius + wire_diameter * 3
     groove_radius = wire_diameter / 2 * 0.95
+    hole_radius = wire_diameter * 0.8
 
-    # Flat feet outside the helix area (attached to outer faces of flanges).
-    # foot_thickness must exceed wire_diameter*2 so the feet sit lower than the flanges.
-    foot_thickness = max(wire_diameter * 3, 2.0)  # hangs below the wire exit height
-    foot_length = max(wire_diameter * 8, 4.0)      # extends outward from flange in Z
-    foot_width = flange_radius * 2                 # full flange diameter for stability
-    hole_radius = wire_diameter * 0.8              # snug wire guidance hole
-
-    # The wire exits the groove at y = -form_radius (bottom of the helix).
-    # The foot top is flush with this height; the foot hangs below it.
-    foot_y_center = -(form_radius + foot_thickness / 2)
+    foot_width = flange_radius * 2  # kept full width
 
     # Body with helical groove (z=0 to z=total_length)
     body = m3d.Manifold.cylinder(total_length, form_radius)
     groove = _helix_groove(pitch, num_windings, form_radius, groove_radius)
     body = body - groove
 
-    # Flanges at each end
-    left_flange = m3d.Manifold.cylinder(flange_thickness, flange_radius).translate(
-        (0, 0, -flange_thickness)
-    )
-    right_flange = m3d.Manifold.cylinder(flange_thickness, flange_radius).translate(
-        (0, 0, total_length)
-    )
-    body = body + left_flange + right_flange
+    # End plate cross-section: upper semicircle + lower rectangle.
+    # The semicircle (y >= 0) contains the windings; the rectangle (y <= 0)
+    # is the foot with a flat bottom face at y = -flange_radius for PCB mounting.
+    # Plate is rebuilt per end — trim_by_plane result cannot be translated twice.
+    def _make_plate():
+        upper_semi = (
+            m3d.Manifold.cylinder(flange_thickness, flange_radius)
+            .trim_by_plane((0, 1, 0), 0)
+        )
+        lower_rect = (
+            m3d.Manifold.cube((foot_width, flange_radius, flange_thickness), center=False)
+            .translate((-foot_width / 2, -flange_radius, 0))
+        )
+        return upper_semi + lower_rect
 
-    # Flat feet: one per end, outside the helix area, wire hole aligned with groove exit.
-    for z_inner, direction in [(-flange_thickness, -1), (total_length + flange_thickness, +1)]:
-        z_center = z_inner + direction * foot_length / 2
-        foot = (
-            m3d.Manifold.cube((foot_width, foot_thickness, foot_length), center=True)
-            .translate((0, foot_y_center, z_center))
+    y_hole_height = flange_radius - form_radius + hole_radius + 1
+
+    for z_plate_start, z_inner_face, inner_dir in [
+        (-flange_thickness, 0, -1),        # left plate: z=-flange_thickness to z=0
+        (total_length, total_length, +1),  # right plate: z=total_length to z=total_length+flange_thickness
+    ]:
+        plate = _make_plate().translate((0, 0, z_plate_start))
+
+        # Z-hole: wire exits the coil groove through the end plate
+        z_hole = (
+            m3d.Manifold.cylinder(flange_thickness + 2, hole_radius)
+            .translate((0, -form_radius, z_plate_start - 1))
         )
-        # Wire hole along Y through the foot, near the inner edge (closest to coil)
-        hole_z = z_inner + direction * foot_length * 0.25
-        wire_hole = (
-            m3d.Manifold.cylinder(foot_thickness + 2, hole_radius, center=True)
+
+        # Y-hole: just inside the inner face, wire drops straight to PCB
+        z_y = z_inner_face + inner_dir * hole_radius
+        y_hole = (
+            m3d.Manifold.cylinder(y_hole_height, hole_radius)
             .rotate((90, 0, 0))
-            .translate((0, foot_y_center, hole_z))
+            .translate((0, -flange_radius - 1, z_y))
         )
-        body = body + (foot - wire_hole)
+
+        body = body + (plate - z_hole - y_hole)
+
+    # Hollow centre through the full form including end plates: 2 mm average wall thickness
+    inner_radius = form_radius - 2.0
+    if inner_radius > 0.5:
+        full_length = total_length + 2 * flange_thickness + 2
+        body = body - m3d.Manifold.cylinder(full_length, inner_radius).translate(
+            (0, 0, -flange_thickness - 1)
+        )
 
     return body
 
@@ -85,6 +99,11 @@ def build_removable_form(coil_diameter, num_windings, wire_diameter, winding_dis
     body = m3d.Manifold.cylinder(body_length, form_radius)
     groove = _helix_groove(pitch, num_windings_total, form_radius, groove_radius)
     body = body - groove
+
+    # Hollow centre: 2 mm average wall thickness
+    inner_radius = form_radius - 2.0
+    if inner_radius > 0.5:
+        body = body - m3d.Manifold.cylinder(body_length + 2, inner_radius).translate((0, 0, -1))
 
     return body
 
