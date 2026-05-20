@@ -3,7 +3,7 @@ import numpy as np
 import manifold3d as m3d
 
 
-def _helix_groove(pitch, num_windings, radius, groove_radius, segments_per_turn=48):
+def _helix_groove(pitch, num_windings, radius, groove_radius, segments_per_turn=64):
     n = int(num_windings * segments_per_turn)
     spheres = []
     for i in range(n + 1):
@@ -13,7 +13,7 @@ def _helix_groove(pitch, num_windings, radius, groove_radius, segments_per_turn=
         x = radius * np.cos(angle)
         y = radius * np.sin(angle)
         z = t * pitch
-        spheres.append(m3d.Manifold.sphere(groove_radius, 8).translate((x, y, z)))
+        spheres.append(m3d.Manifold.sphere(groove_radius, 16).translate((x, y, z)))
 
     segments = [m3d.Manifold.batch_hull([spheres[i], spheres[i + 1]]) for i in range(n)]
     return m3d.Manifold.batch_boolean(segments, m3d.OpType.Add)
@@ -25,7 +25,7 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
     form_radius = (coil_diameter - wire_diameter) / 2
 
     flange_thickness = max(wire_diameter * 2, 1.5)  # half of previous thickness
-    flange_radius = form_radius + wire_diameter * 3
+    flange_radius = form_radius + wire_diameter * 2  # 1 wire-diameter beyond the outer coil edge
     groove_radius = wire_diameter / 2 * 0.95
     hole_radius = wire_diameter * 0.8
 
@@ -154,6 +154,10 @@ def main():
     parser.add_argument("--output", "-o", type=str, default=None,
                         help="Output STL file path")
     args = parser.parse_args()
+
+    # High-quality circular segments: 2° max angle, 0.2 mm max edge length
+    m3d.set_min_circular_angle(2)
+    m3d.set_min_circular_edge_length(0.2)
 
     form_type = "permanent" if args.permanent else "removable"
     if args.output is None:
