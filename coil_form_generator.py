@@ -8,7 +8,8 @@ def _helix_groove(pitch, num_windings, radius, groove_radius, segments_per_turn=
     spheres = []
     for i in range(n + 1):
         t = i / segments_per_turn
-        angle = t * 2 * np.pi
+        # -π/2 offset: helix starts and ends at the bottom (y = -radius)
+        angle = t * 2 * np.pi - np.pi / 2
         x = radius * np.cos(angle)
         y = radius * np.sin(angle)
         z = t * pitch
@@ -27,11 +28,16 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
     flange_radius = form_radius + wire_diameter * 2
     groove_radius = wire_diameter / 2 * 0.95
 
-    # Flat feet outside the helix area (attached to outer faces of flanges)
-    foot_thickness = max(wire_diameter * 3, 2.0)  # thin flat pad
+    # Flat feet outside the helix area (attached to outer faces of flanges).
+    # foot_thickness must exceed wire_diameter*2 so the feet sit lower than the flanges.
+    foot_thickness = max(wire_diameter * 3, 2.0)  # hangs below the wire exit height
     foot_length = max(wire_diameter * 8, 4.0)      # extends outward from flange in Z
     foot_width = flange_radius * 2                 # full flange diameter for stability
     hole_radius = wire_diameter * 0.8              # snug wire guidance hole
+
+    # The wire exits the groove at y = -form_radius (bottom of the helix).
+    # The foot top is flush with this height; the foot hangs below it.
+    foot_y_center = -(form_radius + foot_thickness / 2)
 
     # Body with helical groove (z=0 to z=total_length)
     body = m3d.Manifold.cylinder(total_length, form_radius)
@@ -47,21 +53,19 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
     )
     body = body + left_flange + right_flange
 
-    # Flat feet: one per end, attached to outer face of each flange, outside the helix area.
-    # Each foot is a flat pad at the bottom (y = -flange_radius) with a vertical wire hole.
+    # Flat feet: one per end, outside the helix area, wire hole aligned with groove exit.
     for z_inner, direction in [(-flange_thickness, -1), (total_length + flange_thickness, +1)]:
         z_center = z_inner + direction * foot_length / 2
-        # Flat pad sitting at the bottom of the flange
         foot = (
             m3d.Manifold.cube((foot_width, foot_thickness, foot_length), center=True)
-            .translate((0, -(flange_radius - foot_thickness / 2), z_center))
+            .translate((0, foot_y_center, z_center))
         )
-        # Vertical wire guidance hole (Y axis) near the inner edge of the foot
+        # Wire hole along Y through the foot, near the inner edge (closest to coil)
         hole_z = z_inner + direction * foot_length * 0.25
         wire_hole = (
             m3d.Manifold.cylinder(foot_thickness + 2, hole_radius, center=True)
             .rotate((90, 0, 0))
-            .translate((0, -(flange_radius - foot_thickness / 2), hole_z))
+            .translate((0, foot_y_center, hole_z))
         )
         body = body + (foot - wire_hole)
 
