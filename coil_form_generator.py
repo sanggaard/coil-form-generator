@@ -27,11 +27,13 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
     flange_radius = form_radius + wire_diameter * 2
     groove_radius = wire_diameter / 2 * 0.95
 
-    foot_width = wire_diameter * 6
-    foot_protrusion = form_radius
-    hole_radius = wire_diameter * 0.75
+    # Flat feet outside the helix area (attached to outer faces of flanges)
+    foot_thickness = max(wire_diameter * 3, 2.0)  # thin flat pad
+    foot_length = max(wire_diameter * 8, 4.0)      # extends outward from flange in Z
+    foot_width = flange_radius * 2                 # full flange diameter for stability
+    hole_radius = wire_diameter * 0.8              # snug wire guidance hole
 
-    # Body with helical groove
+    # Body with helical groove (z=0 to z=total_length)
     body = m3d.Manifold.cylinder(total_length, form_radius)
     groove = _helix_groove(pitch, num_windings, form_radius, groove_radius)
     body = body - groove
@@ -45,17 +47,21 @@ def build_permanent_form(coil_diameter, num_windings, wire_diameter, winding_dis
     )
     body = body + left_flange + right_flange
 
-    # Feet: rectangular tabs below each flange with wire through-holes
-    for flange_z_center in [-flange_thickness / 2, total_length + flange_thickness / 2]:
+    # Flat feet: one per end, attached to outer face of each flange, outside the helix area.
+    # Each foot is a flat pad at the bottom (y = -flange_radius) with a vertical wire hole.
+    for z_inner, direction in [(-flange_thickness, -1), (total_length + flange_thickness, +1)]:
+        z_center = z_inner + direction * foot_length / 2
+        # Flat pad sitting at the bottom of the flange
         foot = (
-            m3d.Manifold.cube((foot_width, foot_protrusion, flange_thickness), center=True)
-            .translate((0, -(form_radius + foot_protrusion / 2), flange_z_center))
+            m3d.Manifold.cube((foot_width, foot_thickness, foot_length), center=True)
+            .translate((0, -(flange_radius - foot_thickness / 2), z_center))
         )
-        # Wire hole along Y axis through the foot
+        # Vertical wire guidance hole (Y axis) near the inner edge of the foot
+        hole_z = z_inner + direction * foot_length * 0.25
         wire_hole = (
-            m3d.Manifold.cylinder(foot_protrusion + 2, hole_radius)
+            m3d.Manifold.cylinder(foot_thickness + 2, hole_radius, center=True)
             .rotate((90, 0, 0))
-            .translate((0, -(form_radius + foot_protrusion + 1), flange_z_center))
+            .translate((0, -(flange_radius - foot_thickness / 2), hole_z))
         )
         body = body + (foot - wire_hole)
 
